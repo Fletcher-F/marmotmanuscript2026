@@ -1,7 +1,9 @@
 """Alignment Script
 Fletcher Falk
-Updated March 6, 2026
-Script takes input path to folder and runs bwa-mem2 onto a passed reference genome"""
+Updated March 13, 2026
+Script takes input path to folder and runs bbmap onto a passed reference genome
+Raw data is located in trimmed-paired directory. Modify to directory of use.
+Also reads are required to have specific naming format see line 43."""
 
 """Importing libraries"""
 import os, subprocess, argparse, sys
@@ -38,7 +40,8 @@ def alignment(args):
     "Using ", threads, " threads... \n", "File(s) path = ", path, "\n",
     "Reference genome: ", reference, "\n")
 
-    """Running BWA"""
+    """Building sequence list
+    Raw data must be organized with same file format or edit below"""
     filepairs = defaultdict(dict)
     print("Pairs of sequences found: \n")
     for file in os.listdir(path):
@@ -49,13 +52,10 @@ def alignment(args):
             key = file.replace("_R_paired_R2.fastq.gz", "")
             filepairs[key]["R2"] = file
 
-    print("Indexing reference genome for BWA")
-    """Using bwa-mem2"""
-    bwaindex = "bwa-mem2 index " + reference
-    execute(bwaindex)
-
-    """Making directories for output bam"""
-    os.mkdir("./trimmed-paired/bam-align")
+    """Making directories for output
+    In this case only writing mapped reads prevents overusing disk space"""
+    os.mkdir("./trimmed-paired/sam-align")
+    os.mkdir("./trimmed-paired/sorted-align")
     os.mkdir("./trimmed-paired/bcfcalls")
     os.mkdir("./trimmed-paired/bcfnorm")
     os.mkdir("./trimmed-paired/bcfinal")
@@ -65,30 +65,36 @@ def alignment(args):
     for sample, reads in filepairs.items():
         forward = reads["R1"]
         reverse = reads["R2"]
-        bwa = "bwa-mem2 mem -t " + threads + " " + reference + " " + path + forward + " " + path + reverse + " | samtools sort --write-index -@ " + threads + " -o " + path + "bam-align/" + sample + "align.bam"
-        print("Running bwa-mem2 on: " + sample)
-        execute(bwa)
+        """Map on vslow algorithm to ensure precision"""
+        bbmap = "bbmap.sh in1=" + path + forward + " in2=" + path + reverse + " mappedonly=t ref=" + reference + " vslow k=8 maxindel=200 out=" + path + "sam-align/" + sample + "align.sam"
+        sort = "samtools view -bS " + path + "sam-align/" + sample + "align.sam | samtools sort -o " + path + "sorted-align/" + sample + "salign.bam"
+        """Convert to bam for BCFtools steps"""
+        sindex = "samtools index " + path + "sorted-align/" + sample + "salign.bam"
+        execute(bbmap)
+        execute(sort)
+        execute(sindex)
         """Write consensus for each mitogenome using bcftools
-        Call variants and index
-        These commands could be piped together but are separate for error testing"""
-        bcftools = "bcftools mpileup -Ou --min-MQ 30 --min-BQ 30 -f " + reference + " " + path + "bam-align/" + sample + "align.bam | bcftools call -mv -Oz --threads 96 --ploidy 1 -o " + path + "bcfcalls/" + sample + "calls.vcf.gz"
+        First call variants and index
+        These commands could be piped together but were separated during error testing"""
+        bcftools = "bcftools mpileup -Ou --min-MQ 30 --min-BQ 30 -f " + reference + " " + path + "sorted-align/" + sample + "salign.bam | bcftools call -mv -Oz --threads 96 --ploidy 1 -o " + path + "bcfcalls/" + sample + "calls.vcf.gz"
         execute(bcftools)
         bcfindex = "bcftools index --threads " + threads + " " + path + "bcfcalls/" + sample + "calls.vcf.gz"
         execute(bcfindex)
         bcfnorm = "bcftools norm -f " + reference + " --threads " + threads + " " + path + "bcfcalls/" + sample + "calls.vcf.gz -Ob -o " + path + "bcfnorm/" + sample + "calls.norm.vcf.gz"
         execute(bcfnorm)
-        bcfilter = "bcftools filter -e 'QUAL<30' --threads " + threads + " " + path + "bcfnorm/" + sample + "calls.norm.vcf.gz -Ob -o " + path + "bcfinal/" + sample + "calls.norm.flt.vcf.gz"
+        bcfilter = "bcftools filter -e 'QUAL<40' --threads " + threads + " " + path + "bcfnorm/" + sample + "calls.norm.vcf.gz -Ob -o " + path + "bcfinal/" + sample + "calls.norm.flt.vcf.gz"
         execute(bcfilter)
         bcfindex2 = "bcftools index --threads " + threads + " " + path + "bcfinal/" + sample + "calls.norm.flt.vcf.gz"
         execute(bcfindex2)
         consensus = "cat " + reference + " | bcftools consensus " + path + "bcfinal/" + sample + "calls.norm.flt.vcf.gz > " + path + "consensus-mitogenomes/" + sample + "consensus.fa"
         execute(consensus)
+        """Transfer consensus to Geneious: annotate, translate, and align for comparison"""
 
     """SAMtools stats for review"""
-    os.mkdir("bwa-samtools-results")
+    os.mkdir("samtools-stats")
     for sample, reads in filepairs.items():
-        bwasamtools = "samtools stats -@ " + threads + " " + path + "bam-align/" + sample + "align.bam > " + path + "/bwa-samtools-results/" + sample + "_stats.txt"
-        execute(bwasamtools)
+        samstats = "samtools stats -@ " + threads + " " + path + "bam-align/" + sample + "align.bam > " + path + "/bwa-samtools-results/" + sample + "_stats.txt"
+        execute(samstats)
 
 """Main: sets up arguments and runs program"""
 def main():

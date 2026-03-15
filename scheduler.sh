@@ -18,5 +18,6 @@ module load samtools
 module load StdEnv/2023
 module load gcc/12.3
 module load bcftools
+module load bbmap
 
 python3 "$@"
